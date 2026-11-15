@@ -165,7 +165,7 @@ services:
       context: ../..
       dockerfile: infra/docker/web.Dockerfile
       args:
-        VITE_API_BASE_URL: http://localhost:${EMAIL_API_PORT:-5126}/api/v1
+        VITE_API_BASE_URL: ${WEB_VITE_API_BASE_URL:-http://localhost:${EMAIL_API_PORT:-5126}/api/v1}
     image: open-email-web:local
     ports:
       - "127.0.0.1:${EMAIL_WEB_PORT:-3650}:8080"
@@ -181,7 +181,7 @@ services:
       context: ../..
       dockerfile: infra/docker/console.Dockerfile
       args:
-        VITE_API_BASE_URL: http://localhost:${EMAIL_API_PORT:-5126}/api/v1/operator
+        VITE_API_BASE_URL: ${CONSOLE_VITE_API_BASE_URL:-http://localhost:${EMAIL_API_PORT:-5126}/api/v1/operator}
     image: open-email-console:local
     ports:
       - "127.0.0.1:${EMAIL_CONSOLE_PORT:-3660}:8080"
