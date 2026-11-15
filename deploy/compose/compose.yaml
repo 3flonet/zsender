@@ -38,13 +38,13 @@ x-api-env: &api-env
   LOG_LEVEL: ${LOG_LEVEL:-info}
   BRAND_NAME: ${EMAIL_BRAND_NAME:-ZSender}
   # Where the browser lands (links in emails and password resets).
-  EMAIL_APP_URL: http://localhost:${EMAIL_WEB_PORT:-3650}
-  OPERATOR_APP_URL: http://localhost:${EMAIL_CONSOLE_PORT:-3660}
+  EMAIL_APP_URL: ${EMAIL_APP_URL:-http://localhost:${EMAIL_WEB_PORT:-3650}}
+  OPERATOR_APP_URL: ${OPERATOR_APP_URL:-http://localhost:${EMAIL_CONSOLE_PORT:-3660}}
   # The API's own public base (unsubscribe, tracking, form and web-view links, signed local files).
-  APP_PUBLIC_URL: http://localhost:${EMAIL_API_PORT:-5126}
-  CORS_ORIGINS: http://localhost:${EMAIL_WEB_PORT:-3650},http://127.0.0.1:${EMAIL_WEB_PORT:-3650},http://localhost:${EMAIL_CONSOLE_PORT:-3660},http://127.0.0.1:${EMAIL_CONSOLE_PORT:-3660}
+  APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost:${EMAIL_API_PORT:-5126}}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:${EMAIL_WEB_PORT:-3650},http://127.0.0.1:${EMAIL_WEB_PORT:-3650},http://localhost:${EMAIL_CONSOLE_PORT:-3660},http://127.0.0.1:${EMAIL_CONSOLE_PORT:-3660}}
   # The browser talks to the API directly: no proxy hop to trust.
-  TRUST_PROXY: "0"
+  TRUST_PROXY: ${TRUST_PROXY:-"1"}
   PG_DATABASE_HOST: postgres
   PG_DATABASE_PORT: "5432"
   PG_DATABASE_USER: mail
