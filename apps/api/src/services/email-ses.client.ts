@@ -1,4 +1,5 @@
 import { sesClientOptions, sesConfigured } from "../utils/aws";
+import nodemailer, { type Transporter } from "nodemailer";
 import {
   CreateConfigurationSetCommand,
   GetAccountCommand,
@@ -38,6 +39,14 @@ export interface SesSendResult {
   provider: "SES" | "SIMULATED";
 }
 
+export interface SmtpOptions {
+  host: string;
+  port: number;
+  secure?: boolean;
+  username?: string;
+  password?: string;
+}
+
 export interface SesAccountInfo {
   mode: "aws" | "simulated";
   sendingEnabled: boolean;
@@ -64,6 +73,7 @@ const simulatedDkimTokens = (subdomain: string): string[] => {
 // onboard/verify flow is usable and testable offline.
 class EmailSesClient {
   private ses: SESv2Client | null = null;
+  private smtp: Transporter | null = null;
 
   constructor() {
     const keyed = sesConfigured();
@@ -79,10 +89,31 @@ class EmailSesClient {
   }
 
   isLive(): boolean {
-    return this.ses !== null;
+    return this.ses !== null || this.smtp !== null;
+  }
+
+  reconfigureSmtp(options: SmtpOptions | null) {
+    this.ses = null;
+    if (!options || !options.host || !options.username || !options.password) {
+      this.smtp = null;
+      logger.info("Email sending: SMTP disabled");
+      return;
+    }
+    this.smtp = nodemailer.createTransport({
+      host: options.host,
+      port: options.port,
+      secure: options.secure ?? (options.port === 465),
+      auth: {
+        user: options.username,
+        pass: options.password,
+      },
+      connectionTimeout: 15000,
+    });
+    logger.info(`Email sending: SMTP driver reconfigured dynamically for host ${options.host}:${options.port}`);
   }
 
   reconfigure(options: { region: string; accessKeyId?: string; secretAccessKey?: string } | null) {
+    this.smtp = null;
     if (!options || !options.accessKeyId || !options.secretAccessKey) {
       const keyed = sesConfigured();
       const underTest = config.NODE_ENV === "test" || process.env.VITEST === "true";
@@ -181,6 +212,22 @@ class EmailSesClient {
   // Unified low-level send used by the mailer for both the custom-domain and
   // legacy platform-default paths. Simulated when SES is not keyed / under test.
   async sendEmail(params: SesSendParams): Promise<SesSendResult> {
+    if (this.smtp) {
+      const result = await this.smtp.sendMail({
+        from: params.from,
+        to: params.to,
+        replyTo: params.replyTo ?? undefined,
+        subject: params.subject,
+        text: params.text,
+        html: params.html ?? undefined,
+        headers: params.headers?.reduce((acc, h) => {
+          acc[h.name] = h.value;
+          return acc;
+        }, {} as Record<string, string>),
+      });
+      return { messageId: result.messageId || `smtp_${ulid()}`, provider: "SES" };
+    }
+
     if (!this.ses) {
       return { messageId: `sim_${ulid()}`, provider: "SIMULATED" };
     }
@@ -231,6 +278,17 @@ class EmailSesClient {
   // SES account level health: sandbox flag, send quota and 24 hour usage. Simulated mode
   // returns a fixed, plausible account so the console renders offline.
   async getAccount(): Promise<SesAccountInfo> {
+    if (this.smtp) {
+      return {
+        mode: "aws",
+        sendingEnabled: true,
+        sandbox: false,
+        max24Hour: 10000,
+        maxPerSecond: 10,
+        sentLast24Hours: 0,
+      };
+    }
+
     if (!this.ses) {
       return {
         mode: "simulated",

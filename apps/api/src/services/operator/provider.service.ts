@@ -3,6 +3,7 @@ import {
   SESv2Client,
   SendEmailCommand,
 } from "@aws-sdk/client-sesv2";
+import nodemailer from "nodemailer";
 import config from "../../config";
 import providerRepository from "../../repositories/operator/provider.repository";
 import { decryptCredentials, encryptCredentials } from "../../utils/crypto";
@@ -186,6 +187,7 @@ class ProviderService {
 
     // Reconfigure email client live in memory
     if (input.providerType === "SES") {
+      emailSesClient.reconfigureSmtp(null);
       const creds = decryptCredentials<StoredCredentials>(newEncryptedCreds);
       if (creds?.accessKeyId && creds?.secretAccessKey) {
         emailSesClient.reconfigure({
@@ -194,8 +196,19 @@ class ProviderService {
           secretAccessKey: creds.secretAccessKey,
         });
       }
+    } else if (input.providerType === "SMTP") {
+      emailSesClient.reconfigure(null);
+      const creds = decryptCredentials<StoredCredentials>(newEncryptedCreds);
+      emailSesClient.reconfigureSmtp({
+        host: input.config.host || "",
+        port: Number(input.config.port) || 465,
+        secure: input.config.secure ?? (Number(input.config.port) === 465),
+        username: input.config.username || "",
+        password: creds?.password || "",
+      });
     } else if (input.providerType === "SIMULATED") {
       emailSesClient.reconfigure(null);
+      emailSesClient.reconfigureSmtp(null);
     }
 
     return this.getConfig();
@@ -286,7 +299,100 @@ class ProviderService {
       }
     }
 
+    if (providerType === "SMTP") {
+      const host = parsedConfig.host;
+      const port = Number(parsedConfig.port) || 465;
+      const secure = parsedConfig.secure ?? (port === 465);
+      const user = parsedConfig.username;
+      const pass = creds?.password;
+
+      if (!host || !user || !pass) {
+        const error = "SMTP configuration (Host, Username, and Password) is incomplete.";
+        await providerRepository.updateDefault({
+          status: "ERROR",
+          last_error: error,
+          last_tested_at: new Date(),
+        });
+        return { success: false, error };
+      }
+
+      try {
+        const transporter = nodemailer.createTransport({
+          host,
+          port,
+          secure,
+          auth: { user, pass },
+          connectionTimeout: 15000,
+        });
+
+        await transporter.verify();
+
+        await providerRepository.updateDefault({
+          status: "CONNECTED",
+          last_error: null,
+          last_tested_at: new Date(),
+        });
+
+        emailSesClient.reconfigureSmtp({
+          host,
+          port,
+          secure,
+          username: user,
+          password: pass,
+        });
+
+        return {
+          success: true,
+          accountInfo: {
+            sendingEnabled: true,
+            sandbox: false,
+            max24Hour: 10000,
+            maxPerSecond: 10,
+            sentLast24Hours: 0,
+          },
+        };
+      } catch (err: unknown) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        await providerRepository.updateDefault({
+          status: "ERROR",
+          last_error: errorMsg,
+          last_tested_at: new Date(),
+        });
+        return { success: false, error: errorMsg };
+      }
+    }
+
     return { success: false, error: `Unsupported provider type: ${providerType}` };
+  }
+
+  /**
+   * Initialize provider from DB at startup.
+   */
+  async init(): Promise<void> {
+    try {
+      const row = await providerRepository.getDefault();
+      if (!row || !row.is_active) return;
+      const creds = decryptCredentials<StoredCredentials>(row.credentials);
+      const parsedConfig = (typeof row.config === "string" ? JSON.parse(row.config) : row.config || {}) as StoredConfig;
+
+      if (row.provider_type === "SES" && creds?.accessKeyId && creds?.secretAccessKey) {
+        emailSesClient.reconfigure({
+          region: parsedConfig.region || config.AWS_SES_REGION || "ap-southeast-1",
+          accessKeyId: creds.accessKeyId,
+          secretAccessKey: creds.secretAccessKey,
+        });
+      } else if (row.provider_type === "SMTP") {
+        emailSesClient.reconfigureSmtp({
+          host: parsedConfig.host || "",
+          port: Number(parsedConfig.port) || 465,
+          secure: parsedConfig.secure ?? (Number(parsedConfig.port) === 465),
+          username: parsedConfig.username || "",
+          password: creds?.password || "",
+        });
+      }
+    } catch (err) {
+      logger.warn(`Could not initialize active email provider from DB: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   /**
@@ -319,10 +425,10 @@ class ProviderService {
             <div style="background-color: #ab1757; color: white; border-radius: 8px; width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center; font-weight: bold; font-size: 20px; line-height: 40px; text-align: center; margin-right: 12px;">Z</div>
             <h2 style="margin: 0; color: #0f172a; font-size: 20px;">ZSender Connection Test</h2>
           </div>
-          <p style="color: #334155; font-size: 15px; line-height: 1.6;">Selamat! Integrasi pengiriman email <strong>ZSender</strong> dengan <strong>Amazon Simple Email Service (SES)</strong> telah berhasil terhubung dan berfungsi dengan sempurna.</p>
+          <p style="color: #334155; font-size: 15px; line-height: 1.6;">Selamat! Integrasi pengiriman email <strong>ZSender</strong> dengan <strong>${row?.provider_type === "SMTP" ? "Custom SMTP" : "Amazon Simple Email Service (SES)"}</strong> telah berhasil terhubung dan berfungsi dengan sempurna.</p>
           <div style="background: #f1f5f9; border-radius: 8px; padding: 16px; margin: 24px 0; font-size: 13px; color: #475569;">
-            <p style="margin: 4px 0;"><strong>Provider:</strong> Amazon Simple Email Service (SES)</p>
-            <p style="margin: 4px 0;"><strong>Region:</strong> ${region}</p>
+            <p style="margin: 4px 0;"><strong>Provider:</strong> ${row?.provider_type === "SMTP" ? `SMTP (${parsedConfig.host}:${parsedConfig.port})` : "Amazon Simple Email Service (SES)"}</p>
+            ${row?.provider_type === "SES" ? `<p style="margin: 4px 0;"><strong>Region:</strong> ${region}</p>` : ""}
             <p style="margin: 4px 0;"><strong>Sender:</strong> ${fromName} &lt;${fromEmail}&gt;</p>
             <p style="margin: 4px 0;"><strong>Timestamp:</strong> ${new Date().toISOString()}</p>
           </div>

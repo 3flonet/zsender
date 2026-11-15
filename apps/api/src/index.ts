@@ -9,6 +9,7 @@ import config, { assertProductionConfig } from "./config";
 import { closeDB, waitForDBConnection } from "./db/connection";
 import { closeRedis } from "./db/redis";
 import { startJobs, stopJobs } from "./jobs";
+import providerService from "./services/operator/provider.service";
 import logger from "./utils/logger";
 
 assertProductionConfig();
@@ -81,6 +82,7 @@ const startWorker = async (): Promise<void> => {
   });
 
   await waitForDBConnection();
+  await providerService.init();
 
   const port = Number(config.PORT);
   const server = app.listen(port, () => {
